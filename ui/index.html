@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>2tone</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d0d0d;
+      color: #e0e0e0;
+      font-family: monospace;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 28px;
+    }
+    h1 {
+      font-size: 2rem;
+      letter-spacing: 0.3em;
+      color: #fff;
+      text-transform: uppercase;
+    }
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: 460px;
+    }
+    input[type="text"] {
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      color: #e0e0e0;
+      padding: 11px 14px;
+      font-family: monospace;
+      font-size: 0.9rem;
+      outline: none;
+      width: 100%;
+    }
+    input[type="text"]:focus { border-color: #555; }
+    select {
+      background: #141414;
+      border: 1px solid #2a2a2a;
+      color: #e0e0e0;
+      padding: 11px 14px;
+      font-family: monospace;
+      font-size: 0.9rem;
+      outline: none;
+      width: 100%;
+      appearance: none;
+      cursor: pointer;
+    }
+    select:focus { border-color: #555; }
+    button {
+      background: #e0e0e0;
+      color: #0d0d0d;
+      border: none;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 0.85rem;
+      font-weight: bold;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    button:hover:not(:disabled) { background: #fff; }
+    button:disabled { background: #2a2a2a; color: #555; cursor: default; }
+    #status {
+      font-size: 0.8rem;
+      color: #666;
+      height: 1rem;
+      letter-spacing: 0.05em;
+    }
+    #status.error { color: #c0392b; }
+    #status.ok { color: #27ae60; }
+    audio {
+      width: 460px;
+      filter: invert(1) hue-rotate(180deg);
+    }
+  </style>
+</head>
+<body>
+  <h1>2tone</h1>
+
+  <form id="form">
+    <input id="url" type="text" placeholder="youtube url" autocomplete="off" required>
+    <select id="format">
+      <option value="flac" selected>flac (lossless)</option>
+      <option value="m4a">m4a</option>
+      <option value="mp3">mp3</option>
+      <option value="opus">opus</option>
+    </select>
+    <select id="quality" style="display:none">
+      <option value="96k">96k</option>
+      <option value="128k" selected>128k</option>
+      <option value="192k">192k</option>
+      <option value="256k">256k</option>
+      <option value="320k">320k</option>
+    </select>
+    <button id="btn" type="submit">stream</button>
+  </form>
+
+  <p id="status"></p>
+  <audio id="player" controls></audio>
+
+  <script>
+    const form      = document.getElementById('form');
+    const btn       = document.getElementById('btn');
+    const statusEl  = document.getElementById('status');
+    const audio     = document.getElementById('player');
+    const formatEl  = document.getElementById('format');
+    const qualityEl = document.getElementById('quality');
+    let hls         = null;
+    let currentSession = null;
+
+    const LOSSLESS = new Set(['flac', 'wav']);
+    formatEl.addEventListener('change', () => {
+      qualityEl.style.display = LOSSLESS.has(formatEl.value) ? 'none' : '';
+    });
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      if (currentSession) {
+        fetch(`/stream/${currentSession}`, { method: 'DELETE' }).catch(() => {});
+        if (hls) { hls.destroy(); hls = null; }
+        audio.src = '';
+        currentSession = null;
+      }
+
+      btn.disabled = true;
+      setStatus('starting...');
+
+      const url     = document.getElementById('url').value.trim();
+      const format  = formatEl.value;
+      const quality = qualityEl.value;
+
+      try {
+        const res = await fetch('/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, audio_format: format, audio_quality: quality }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.detail || 'server error');
+        }
+        const { session_id, playlist_url } = await res.json();
+        currentSession = session_id;
+
+        setStatus('processing audio...');
+        await waitReady(session_id);
+
+        setStatus('playing', 'ok');
+        loadHLS(playlist_url);
+      } catch (err) {
+        setStatus(err.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    async function waitReady(session_id) {
+      while (true) {
+        const res = await fetch(`/status/${session_id}`);
+        if (!res.ok) throw new Error('session lost');
+        const { ready } = await res.json();
+        if (ready) return;
+        await new Promise(r => setTimeout(r, 800));
+      }
+    }
+
+    function loadHLS(src) {
+      if (Hls.isSupported()) {
+        hls = new Hls();
+        hls.loadSource(src);
+        hls.attachMedia(audio);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => audio.play().catch(() => {}));
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal) setStatus('playback error', 'error');
+        });
+      } else if (audio.canPlayType('application/vnd.apple.mpegurl')) {
+        audio.src = src;
+        audio.play().catch(() => {});
+      } else {
+        setStatus('hls not supported in this browser', 'error');
+      }
+    }
+
+    function setStatus(msg, type = '') {
+      statusEl.textContent = msg;
+      statusEl.className = type;
+    }
+  </script>
+</body>
+</html>
