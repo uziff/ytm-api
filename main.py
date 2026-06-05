@@ -5,12 +5,24 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+
+# py files
 import ytsong
+import ysearch
 
 app = FastAPI(title="ytmAPI")
 
 # I wanna shoutout claude for this main.py :durr:
 # Sorry
+# functions writtem by claude are: 
+"""
+@app.get("/")
+@app.post("/stream")
+@app.get("/status*")
+@app.get("/hls*")
+@app.delete("/stream*")
+
+"""
 
 SESSIONS = {}
 UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
@@ -78,6 +90,11 @@ def stop_stream(session_id: str):
     shutil.rmtree(session["output_dir"], ignore_errors=True)
     return {"message": "Stream stopped"}
 
+
+#func written by hand
+@app.get("/search/{query}")
+def search(query: str):
+    return ysearch.lookup_ytmusic(query, limit=10)
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
