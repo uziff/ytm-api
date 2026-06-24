@@ -2,7 +2,7 @@ import os
 import shutil
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -12,29 +12,11 @@ import ysearch
 
 app = FastAPI(title="ytmAPI")
 
-# I wanna shoutout claude for this main.py :durr:
-# Sorry
-# functions writtem by claude are: 
-"""
-@app.get("/")
-@app.post("/stream")
-@app.get("/status*")
-@app.get("/hls*")
-@app.delete("/stream*")
-
-"""
-
 SESSIONS = {}
-UI_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ui")
 
 
 class StreamRequest(BaseModel):
     url: str
-
-
-@app.get("/")
-def root():
-    return FileResponse(os.path.join(UI_DIR, "index.html"))
 
 
 @app.post("/stream")
@@ -91,7 +73,28 @@ def stop_stream(session_id: str):
     return {"message": "Stream stopped"}
 
 
-#func written by hand
+@app.get("/cdn")
+def cdn_url(url: str = Query(..., description="YouTube URL")):
+    cdn, error = ytsong.get_cdn_url(url)
+    if error:
+        raise HTTPException(status_code=500, detail=error)
+    return {"url": cdn}
+
+
+@app.get("/download")
+def download_track(background_tasks: BackgroundTasks, url: str = Query(..., description="YouTube URL")):
+    file_path, error = ytsong.download(url)
+    if error:
+        raise HTTPException(status_code=500, detail=error)
+    temp_dir = os.path.dirname(file_path)
+    background_tasks.add_task(shutil.rmtree, temp_dir, True)
+    return FileResponse(
+        path=file_path,
+        media_type="audio/mpeg",
+        filename=os.path.basename(file_path),
+    )
+
+
 @app.get("/search/{query}")
 def search(query: str):
     return ysearch.lookup_ytmusic(query, limit=10)
